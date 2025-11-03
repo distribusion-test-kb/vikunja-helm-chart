@@ -1,117 +1,159 @@
-## This chart relies on the common library chart from bjw-s
-## You can find it and the values you can provide and modify, at https://github.com/bjw-s/helm-charts/tree/a081de53024d8328d1ae9ff7e4f6bc500b0f3a29/charts/library/common
-## Here's the link to the values.yaml file: https://github.com/bjw-s/helm-charts/blob/a081de53024d8328d1ae9ff7e4f6bc500b0f3a29/charts/library/common/values.yaml
-## Refer there for more detail about the supported values.
-## Any values that you find in the above `values.yaml` can be provided to this chart and are then rendered.
+# Helm Chart Values
+# Below are the values to pass to the Vikunja Helm chart
 
-######################
-# VIKUNJA COMPONENTS #
-######################
-# You can find the default values that this `values.yaml` overrides, in the comment at the top of this file.
-vikunja:
-  image:
-    repository: vikunja/vikunja
-    #tag: "latest"
-    #pullPolicy: Always
-  persistence:
-    # This is where your Vikunja data lives,
-    # provide an existing PVC or let one be autocreated
-    data:
-      enabled: true
-      # existingClaim: # your-claim
-      accessMode: ReadWriteOnce
-      size: 2Gi
-      mountPath: /app/vikunja/files
-      # storageClass: storage-class
-  ingress:
-    main:
-      enabled: true
-      annotations:
-        # proxy-body-size is set to 0 to remove the body limit on file uploads
-        nginx.ingress.kubernetes.io/proxy-body-size: "0"
-      hosts:
-        - host: vikunja.local
-          paths:
-            - path: /
-      tls: []
-  configMaps:
-    # The configuration for Vikunja's api
-    # https://vikunja.io/docs/config-options/
-    api-config:
-      enabled: true
-      data:
-        config.yml: |
-          typesense:
-            # These configuration values will automatically apply
-            # if the integrated Typesense is enabled below (typesense.enabled)
-            url: "http://{{ printf "%s-typesense" .Release.Name }}:8108"
-            apiKey: "{{ .Values.typesense.env.TYPESENSE_API_KEY }}"
-          redis:
-            # These configuration values will automatically apply
-            # if the integrated Redis is enabled below (redis.enabled)
-            host: "{{ printf "%s-redis-master" .Release.Name }}:6379"
-            db: "{{ .Release.Name }}"
-  env:
-    # To utilize a secret in the environment variables, you can do something like the following: https://github.com/bjw-s/helm-charts/blob/a081de53024d8328d1ae9ff7e4f6bc500b0f3a29/charts/library/common/values.yaml#L141-L145
-    # You could also use MySQL or SQLite, but we recommend PostgreSQL.
-    # https://vikunja.io/docs/config-options/#type
-    VIKUNJA_DATABASE_TYPE: "postgres"
-    VIKUNJA_DATABASE_HOST: "{{ .Release.Name }}-postgresql.{{ .Release.Namespace }}.svc.cluster.local:{{ coalesce .Values.postgresql.global.postgresql.service.ports.postgresql .Values.postgresql.service.ports.postgresql }}"
-    VIKUNJA_DATABASE_USER: "{{ coalesce .Values.postgresql.global.postgresql.auth.username .Values.postgresql.auth.username }}"
-    VIKUNJA_DATABASE_PASSWORD: "{{ coalesce .Values.postgresql.global.postgresql.auth.password .Values.postgresql.auth.password }}"
-    VIKUNJA_DATABASE_DATABASE: "{{ coalesce .Values.postgresql.global.postgresql.auth.database .Values.postgresql.auth.database }}"
 
-##########################
-# END VIKUNJA COMPONENTS #
-##########################
-
-# Optional Dependencies
-
-#  ┬─┐┌─┐┐─┐┌┐┐┌─┐┬─┐┬─┐┐─┐┐─┐┬
-#  │─┘│ │└─┐ │ │ ┬│┬┘├─ └─┐│ ││
-#  ┘  ┘─┘──┘ ┘ ┘─┘┘└┘┴─┘──┘└─\┘─┘
-# Please refer to PostgreSQL subchart for a full list of possible values
-# https://github.com/bitnami/charts/tree/main/bitnami/postgresql/#parameters
 postgresql:
-  enabled: true
-  primary:
-    networkPolicy:
-      enabled: false
-  auth:
-    username: vikunja
-    database: vikunja
-    password: vikunja
-  service:
-    ports:
-      postgresql: 5432
-
-#  ┬─┐┬─┐┬─┐o┐─┐
-#  │┬┘├─ │ ││└─┐
-#  ┘└┘┴─┘┘─┘┘──┘
-# Please refer to Redis subchart for a full list of possible values
-# https://github.com/bitnami/charts/tree/main/bitnami/redis/#parameters
-redis:
   enabled: false
+
+redis:
+  enabled: true
   architecture: standalone
   auth:
     enabled: false
+  image:
+    registry: docker.io
+    repository: redis
+    tag: '8.2'
 
 typesense:
-  enabled: true
-  env:
-    TYPESENSE_DATA_DIR: /data
-    TYPESENSE_API_KEY: typesense
-  persistence:
-    data:
-      # Enabling typesense persistence is recommended to avoid slow reindexing
-      enabled: true
-      accessMode: ReadWriteOnce
-      size: 1Gi
-      # storageClass: storage-class
+  enabled: false
+
+vikunja:
+
+  controller:
+    replicas: 2
 
   image:
-    repository: docker.io/typesense/typesense
-    tag: 0.25.1
+    repository: vikunja/vikunja
     pullPolicy: IfNotPresent
 
-additionalObjects: []
+  # Service configuration with NEG for GCP Load Balancer
+  service:
+    main:
+      type: ClusterIP
+      ports:
+        http:
+          port: 3456
+      annotations:
+        cloud.google.com/neg: '{"exposed_ports": {"3456":{"name": "vikunja-neg"}}}'
+        cloud.google.com/backend-config: '{"default": "vikunja-backend-config"}'
+
+  # Disable ingress - using GCP Load Balancer with NEG instead
+  ingress:
+    main:
+      enabled: false
+
+  # Service account for GCS access
+  serviceAccount:
+    create: false
+    name: vikunja-sa
+
+  # Vikunja configuration via ConfigMap
+  # Disabled - using custom template in templates/configmap-override.yaml to inject secrets
+  configMaps:
+    api-config:
+      enabled: false
+
+  # Environment variables for sensitive data from secrets
+  env:
+    VIKUNJA_DATABASE_USER:
+      valueFrom:
+        secretKeyRef:
+          name: vikunja-secrets
+          key: db-username
+    VIKUNJA_DATABASE_PASSWORD:
+      valueFrom:
+        secretKeyRef:
+          name: vikunja-secrets
+          key: db-password
+    VIKUNJA_SERVICE_JWTSECRET:
+      valueFrom:
+        secretKeyRef:
+          name: vikunja-secrets
+          key: jwt-secret
+    VIKUNJA_AUTH_OPENID_PROVIDERS_0_CLIENTSECRET:
+      valueFrom:
+        secretKeyRef:
+          name: vikunja-secrets
+          key: openid-client-secret
+
+  # Persistence - GCS bucket mounted via CSI driver
+  persistence:
+    data:
+      enabled: true
+      type: pvc
+      existingClaim: vikunja-gcs-pvc
+      mountPath: /app/vikunja/files
+
+  # Resource limits
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1024Mi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+
+  # Probes
+  probes:
+    liveness:
+      enabled: true
+      custom: true
+      spec:
+        httpGet:
+          path: /api/v1/info
+          port: http
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 3
+    readiness:
+      enabled: true
+      custom: true
+      spec:
+        httpGet:
+          path: /api/v1/info
+          port: http
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        timeoutSeconds: 3
+        failureThreshold: 3
+    startup:
+      enabled: false
+
+  # Pod annotations for GCS CSI driver sidecar
+  podAnnotations:
+    gke-gcsfuse/volumes: "true"
+    gke-gcsfuse/cpu-limit: "250m"
+    gke-gcsfuse/memory-limit: "256Mi"
+    gke-gcsfuse/ephemeral-storage-limit: "2Gi"
+
+  # Security context
+  podSecurityContext:
+    fsGroup: 1000
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: false
+
+  # Affinity rules for multi-region deployment
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - vikunja
+            topologyKey: kubernetes.io/hostname
+
+# NOTE: Service accounts, secrets, PV/PVC, and BackendConfig are deployed separately
+# using values-pre-install.yaml to ensure External Secrets syncs before main deployment
