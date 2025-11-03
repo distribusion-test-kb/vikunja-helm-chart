@@ -1,0 +1,77 @@
+{{- if not .Values.skipConfigMap -}}
+{{- $secret := lookup "v1" "Secret" .Release.Namespace "vikunja-secrets" -}}
+{{- if $secret -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-api-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: vikunja
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  config.yml: |
+    service:
+      frontendurl: "https://vikunja.distribusion.kirillbriukhanov.eu"
+      maxitemsperpage: 50
+      enablecaldav: true
+      timezone: "Europe/Berlin"
+      jwtttl: 259200
+      jwtttllong: 2592000
+
+    database:
+      type: "postgres"
+      host: "postgres.distribusion.internal"
+      database: "vikunja"
+      port: 5432
+      sslmode: "disable"
+      maxopenconnections: 100
+      maxidleconnections: 50
+      maxconnectionlifetime: 3600
+
+    files:
+      basepath: "/app/vikunja/files"
+      maxsize: 20MB
+
+    auth:
+      local:
+        enabled: false
+      openid:
+        enabled: true
+        redirecturl: "https://vikunja.distribusion.kirillbriukhanov.eu/auth/openid/keycloak"
+        providers:
+          - name: keycloak
+            authurl: "https://keycloak.distribusion.kirillbriukhanov.eu/realms/vikunja"
+            logouturl: "https://keycloak.distribusion.kirillbriukhanov.eu/realms/vikunja/protocol/openid-connect/logout"
+            clientid: "vikunja"
+            clientsecret: {{ index $secret.data "openid-client-secret" | b64dec | quote }}
+
+    mailer:
+      enabled: false
+
+    redis:
+      enabled: true
+      host: "{{ .Release.Name }}-redis-master:6379"
+      db: 0
+
+    metrics:
+      enabled: true
+      username: ""
+      password: ""
+
+    ratelimit:
+      enabled: true
+      kind: user
+      period: 60
+      limit: 100
+
+    cors:
+      enable: true
+      origins:
+        - "https://vikunja.distribusion.kirillbriukhanov.eu"
+      maxage: 0
+{{- else -}}
+{{- fail "Secret 'vikunja-secrets' not found. Please ensure External Secrets Operator has synced the secret before deploying." -}}
+{{- end -}}
+{{- end -}}
