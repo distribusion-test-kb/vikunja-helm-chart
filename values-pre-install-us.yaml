@@ -1,0 +1,148 @@
+# Pre-installation values for US cluster
+# Deploy these resources FIRST to allow External Secrets Operator to sync secrets
+# Usage: helm install vikunja-pre ./vikunja -f values-pre-install-us.yaml
+
+skipConfigMap: true
+
+postgresql:
+  enabled: false
+redis:
+  enabled: false
+typesense:
+  enabled: false
+
+vikunja:
+  controller:
+    enabled: false
+
+additionalObjects:
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: external-secrets-sa
+      namespace: vikunja
+      annotations:
+        iam.gke.io/gcp-service-account: external-secrets-operator@distribusion-test-kb.iam.gserviceaccount.com
+
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: vikunja-sa
+      namespace: vikunja
+      annotations:
+        iam.gke.io/gcp-service-account: vikunja-storage@distribusion-test-kb.iam.gserviceaccount.com
+
+  - apiVersion: external-secrets.io/v1
+    kind: SecretStore
+    metadata:
+      name: gcpsm-secret-store
+      namespace: vikunja
+    spec:
+      provider:
+        gcpsm:
+          projectID: "distribusion-test-kb"
+          auth:
+            workloadIdentity:
+              clusterLocation: us-central1-a
+              clusterName: distribusion-us
+              serviceAccountRef:
+                name: external-secrets-sa
+
+  - apiVersion: external-secrets.io/v1
+    kind: ExternalSecret
+    metadata:
+      name: vikunja-secrets
+      namespace: vikunja
+    spec:
+      refreshInterval: 1h
+      secretStoreRef:
+        name: gcpsm-secret-store
+        kind: SecretStore
+      target:
+        name: vikunja-secrets
+        creationPolicy: Owner
+      data:
+        - secretKey: db-username
+          remoteRef:
+            key: vikunja-db-username
+        - secretKey: db-password
+          remoteRef:
+            key: vikunja-db-password
+        - secretKey: jwt-secret
+          remoteRef:
+            key: vikunja-jwt-secret
+        - secretKey: openid-client-secret
+          remoteRef:
+            key: vikunja-openid-client-secret
+
+  # PersistentVolume for GCS bucket
+  - apiVersion: v1
+    kind: PersistentVolume
+    metadata:
+      name: vikunja-gcs-pv
+    spec:
+      capacity:
+        storage: 100Gi
+      accessModes:
+        - ReadWriteMany
+      persistentVolumeReclaimPolicy: Retain
+      claimRef:
+        namespace: vikunja
+        name: vikunja-gcs-pvc
+      csi:
+        driver: gcsfuse.csi.storage.gke.io
+        volumeHandle: distribusion-test-kb-vikunja-files  # Same GCS bucket as Europe
+        volumeAttributes:
+          gcsfuseLoggingSeverity: warning
+          fileCacheCapacity: "10Gi"
+          metadataStatCacheCapacity: "64Mi"
+          metadataTypeCacheCapacity: "64Mi"
+
+  # PersistentVolumeClaim for GCS bucket using GCS Fuse CSI driver
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: vikunja-gcs-pvc
+      namespace: vikunja
+    spec:
+      accessModes:
+        - ReadWriteMany
+      resources:
+        requests:
+          storage: 100Gi
+      storageClassName: ""
+
+  # BackendConfig for GCP Load Balancer health checks and settings
+  - apiVersion: cloud.google.com/v1
+    kind: BackendConfig
+    metadata:
+      name: vikunja-backend-config
+      namespace: vikunja
+    spec:
+      healthCheck:
+        checkIntervalSec: 10
+        timeoutSec: 10
+        healthyThreshold: 2
+        unhealthyThreshold: 3
+        type: HTTP
+        requestPath: /health
+        port: 3456
+      connectionDraining:
+        drainingTimeoutSec: 60
+      timeoutSec: 300
+
+  # PodMonitoring for Google Cloud Managed Service for Prometheus
+  - apiVersion: monitoring.googleapis.com/v1
+    kind: PodMonitoring
+    metadata:
+      name: vikunja-metrics
+      namespace: vikunja
+    spec:
+      endpoints:
+        - port: 3456
+          path: /api/v1/metrics
+          interval: 30s
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: vikunja
+          app.kubernetes.io/instance: vikunja
